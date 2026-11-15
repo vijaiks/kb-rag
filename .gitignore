@@ -1,0 +1,24 @@
+# Virtual env and caches
+.venv/
+__pycache__/
+*.egg-info/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+
+# Generated data: vector DB, manifest, parsed cache, downloaded models
+data/
+*.sqlite
+*.lance
+
+# Secrets - never commit keys
+.env
+*.key
+
+# OS noise
+.DS_Store
+desktop.ini
+Thumbs.db
+
+# Machine-local configuration (copy config.example.yaml instead)
+/config.yaml
