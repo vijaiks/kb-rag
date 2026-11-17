@@ -44,10 +44,11 @@ def search_kb(query: str, technology: str = "") -> str:
     knowledge base / library / saved documents say about a topic, or wants an
     answer grounded in their own collection. Cite file and page in your answer.
     technology: optional filter - NR, LTE, O-RAN, 6G, Kubernetes, etc."""
+    from common import tech_filter
     from query.ask import retrieve
 
     cfg, tbl = _session()
-    where = f"technology LIKE '%{technology}%'" if technology else None
+    where = tech_filter(technology)
     chunks = retrieve(cfg, tbl, query, where)
     if not chunks:
         return "No matching chunks in the knowledge base."
