@@ -72,18 +72,21 @@ def ingest_file(cfg, tbl, man, rel: str, meta: dict, src: Path):
     prev = man.get(rel)
     if prev and prev[0] == h and prev[1] == "done":
         return "skipped"
-    if prev:  # changed file: drop old chunks first
-        tbl.delete(f"file_path = {sql_str(rel)}")
+    # Do all the work that can fail (parse + embed) BEFORE touching the index, so a
+    # failure on a changed file keeps its previous, still-searchable chunks.
     try:
         chunks = parse_and_chunk(cfg, src)
+        vecs = embed_texts(cfg, [c["text"] for c in chunks]) if chunks else []
     except Exception as e:  # noqa: BLE001
         man.set(rel, h, 0, "error", f"{e}\n{traceback.format_exc()[-800:]}")
-        console.print(f"[red]parse failed[/] {rel}: {e}")
+        kept = " (previous version kept in the index)" if prev else ""
+        console.print(f"[red]ingest failed[/] {rel}: {e}{kept}")
         return "error"
+    if prev:  # changed file: new chunks are ready, now replace the old ones
+        tbl.delete(f"file_path = {sql_str(rel)}")
     if not chunks:
         man.set(rel, h, 0, "empty")
         return "empty"
-    vecs = embed_texts(cfg, [c["text"] for c in chunks])
     rows = [
         dict(
             chunk_id=make_chunk_id(rel, h, i),
@@ -143,15 +146,19 @@ def main():
 
     man = Manifest(cfg["data_dir"])
     counts: dict[str, int] = {}
-    for rel, meta in track(todo, description="ingesting"):
-        src = src_root / rel
-        if not src.exists():
-            console.print(f"[yellow]missing[/] {rel}")
-            continue
-        r = ingest_file(cfg, tbl, man, rel, meta, src)
-        counts[r] = counts.get(r, 0) + 1
-
-    tbl.create_fts_index("text", replace=True)
+    try:
+        for rel, meta in track(todo, description="ingesting"):
+            src = src_root / rel
+            if not src.exists():
+                console.print(f"[yellow]missing[/] {rel}")
+                continue
+            r = ingest_file(cfg, tbl, man, rel, meta, src)
+            counts[r] = counts.get(r, 0) + 1
+    finally:
+        # Build the keyword index even if the run was interrupted (Ctrl+C, crash), so the
+        # chunks added so far are searchable. LanceDB cannot index an empty table.
+        if tbl.count_rows():
+            tbl.create_fts_index("text", replace=True)
     console.print(f"result: {counts}; total chunks in index: {tbl.count_rows()}")
 
 
