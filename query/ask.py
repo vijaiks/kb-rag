@@ -34,15 +34,33 @@ def rrf(rank_lists: list[list[str]], k: int = 60) -> dict[str, float]:
     return scores
 
 
+def keyword_hits(tbl, question: str, where: str | None, n: int) -> list[dict]:
+    """BM25 hits, or [] when the keyword index is missing (e.g. the first ingest was
+    interrupted before it was built) - retrieval then degrades to vector-only.
+    The warning goes to stderr: the MCP server uses stdout for its protocol."""
+    fq = tbl.search(question, query_type="fts").limit(n)
+    if where:
+        fq = fq.where(where, prefilter=True)
+    try:
+        return fq.to_list()
+    except Exception as e:  # noqa: BLE001
+        print(
+            f"warning: keyword search unavailable, using vector search only ({e}). "
+            "Fix: uv run python -m ingest.pipeline --rebuild-fts",
+            file=sys.stderr,
+        )
+        return []
+
+
 def retrieve(cfg, tbl, question: str, where: str | None):
     r = cfg["retrieval"]
     n = r["top_k_candidates"]
     qv = embed_texts(cfg, [question])[0].tolist()
     vq = tbl.search(qv).limit(n)
-    fq = tbl.search(question, query_type="fts").limit(n)
     if where:
-        vq, fq = vq.where(where, prefilter=True), fq.where(where, prefilter=True)
-    vhits, fhits = vq.to_list(), fq.to_list()
+        vq = vq.where(where, prefilter=True)
+    vhits = vq.to_list()
+    fhits = keyword_hits(tbl, question, where, n) if r["hybrid"] else []
     by_id = {h["chunk_id"]: h for h in vhits + fhits}
     fused = rrf([[h["chunk_id"] for h in vhits], [h["chunk_id"] for h in fhits]]) if r["hybrid"] else {
         h["chunk_id"]: 1 / (i + 1) for i, h in enumerate(vhits)

@@ -31,6 +31,7 @@ def main():
     console.print(f"[dim]ready in {time.time() - t0:.1f} s - ask away (:quit to exit)[/dim]")
 
     tech, show_chunks, fast = None, False, False
+    configured_reranker = cfg["retrieval"].get("reranker")  # restored when :fast is turned off
     while True:
         try:
             q = input("\nkb> ").strip()
@@ -51,7 +52,7 @@ def main():
             continue
         if q == ":fast":
             fast = not fast
-            cfg["retrieval"]["reranker"] = None if fast else "BAAI/bge-reranker-v2-m3"
+            cfg["retrieval"]["reranker"] = None if fast else configured_reranker
             console.print(f"[dim]fast mode: {fast}[/dim]")
             continue
 
