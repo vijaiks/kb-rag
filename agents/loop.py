@@ -18,7 +18,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
 
-from common import chunks_table, load_config
+from common import chunks_table, load_config, tech_filter
 from llm.client import LLMClient
 from query.ask import retrieve
 
@@ -89,27 +89,38 @@ class Session:
         self.cfg = load_config()
         self.tbl = chunks_table(self.cfg)
         self.llm = LLMClient(self.cfg)
-        self.last_chunks: list[dict] = []
+        # Every chunk retrieved in this session, in order of first appearance. The tag [S<n>]
+        # is the chunk's 1-based position here, so it never changes between searches.
+        self.sources: list[dict] = []
+        self._source_idx: dict[str, int] = {}
+
+    def _tag(self, chunk: dict) -> int:
+        """Stable session-wide source number for a chunk (assigned on first sight)."""
+        cid = chunk["chunk_id"]
+        if cid not in self._source_idx:
+            self.sources.append(chunk)
+            self._source_idx[cid] = len(self.sources)
+        return self._source_idx[cid]
 
     # ---- tool implementations -------------------------------------------
     def search_kb(self, query: str, technology: str | None = None) -> str:
-        where = f"technology LIKE '%{technology}%'" if technology else None
-        self.last_chunks = retrieve(self.cfg, self.tbl, query, where)
-        if not self.last_chunks:
+        chunks = retrieve(self.cfg, self.tbl, query, tech_filter(technology))
+        if not chunks:
             return "No chunks found."
         out = []
-        for i, c in enumerate(self.last_chunks, 1):
+        for c in chunks:
+            n = self._tag(c)
             out.append(
-                f"[S{i}] {c['file_path']} pp.{c['page_start']}-{c['page_end']} "
+                f"[S{n}] {c['file_path']} pp.{c['page_start']}-{c['page_end']} "
                 f"{c['section_path'] or ''}\n{c['text'][:1200]}"
             )
         return "\n\n".join(out)
 
     def verify_answer(self, answer: str) -> str:
-        if not self.last_chunks:
+        if not self.sources:
             return json.dumps({"verdict": "rework", "notes": "No sources retrieved yet."})
         src = "\n\n".join(
-            f"[S{i}] {c['file_path']}\n{c['text'][:1200]}" for i, c in enumerate(self.last_chunks, 1)
+            f"[S{i}] {c['file_path']}\n{c['text'][:1200]}" for i, c in enumerate(self.sources, 1)
         )
         console.print("[dim]critic checking the draft...[/dim]")
         return self.llm.complete(CRITIC_SYSTEM, f"ANSWER:\n{answer}\n\nSOURCES:\n{src}", max_tokens=800)

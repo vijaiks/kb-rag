@@ -14,7 +14,7 @@ import time
 from rich.console import Console
 from rich.markdown import Markdown
 
-from common import chunks_table, embed_texts, load_config
+from common import chunks_table, embed_texts, load_config, tech_filter
 from llm.client import LLMClient
 from query.ask import SYSTEM, build_prompt, retrieve
 
@@ -56,7 +56,7 @@ def main():
             continue
 
         t1 = time.time()
-        where = f"technology LIKE '%{tech}%'" if tech else None
+        where = tech_filter(tech)
         chunks = retrieve(cfg, tbl, q, where)
         t_ret = time.time() - t1
         if not chunks:

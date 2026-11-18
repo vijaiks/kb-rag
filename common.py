@@ -50,6 +50,25 @@ def load_catalog(cfg: dict) -> dict[str, dict] | None:
     return out
 
 
+def sql_str(value: str) -> str:
+    """Quote a Python string as a SQL literal (escapes embedded single quotes)."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def tech_filter(tech: str | None) -> str | None:
+    """WHERE clause for the technology tag filter, or None when no filter is given."""
+    tech = (tech or "").strip()
+    if not tech:
+        return None
+    return f"technology LIKE {sql_str('%' + tech + '%')}"
+
+
+def make_chunk_id(rel_path: str, file_hash: str, index: int) -> str:
+    """Unique per (path, content, position): byte-identical copies at different paths don't collide."""
+    key = hashlib.sha256(f"{rel_path}\0{file_hash}".encode()).hexdigest()[:12]
+    return f"{key}:{index:04d}"
+
+
 class Manifest:
     """SQLite table of every indexed file: path, hash, chunk count. Makes ingestion resumable."""
 

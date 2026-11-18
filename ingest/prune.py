@@ -13,7 +13,7 @@ from pathlib import Path
 
 from rich.console import Console
 
-from common import Manifest, chunks_table, load_catalog, load_config
+from common import Manifest, chunks_table, load_catalog, load_config, sql_str
 
 console = Console()
 
@@ -48,8 +48,7 @@ def main():
 
     tbl = chunks_table(cfg)
     for path, _, _ in victims:
-        safe = path.replace("'", "''")
-        tbl.delete(f"file_path = '{safe}'")
+        tbl.delete(f"file_path = {sql_str(path)}")
         man.con.execute("DELETE FROM files WHERE path=?", (path,))
     man.con.commit()
     tbl.create_fts_index("text", replace=True)

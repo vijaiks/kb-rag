@@ -13,7 +13,7 @@ from collections import defaultdict
 from rich.console import Console
 from rich.markdown import Markdown
 
-from common import chunks_table, embed_texts, load_config
+from common import chunks_table, embed_texts, load_config, tech_filter
 from llm.client import LLMClient
 
 console = Console()
@@ -41,7 +41,7 @@ def retrieve(cfg, tbl, question: str, where: str | None):
     vq = tbl.search(qv).limit(n)
     fq = tbl.search(question, query_type="fts").limit(n)
     if where:
-        vq, fq = vq.where(where, prefilter=True), fq.where(where)
+        vq, fq = vq.where(where, prefilter=True), fq.where(where, prefilter=True)
     vhits, fhits = vq.to_list(), fq.to_list()
     by_id = {h["chunk_id"]: h for h in vhits + fhits}
     fused = rrf([[h["chunk_id"] for h in vhits], [h["chunk_id"] for h in fhits]]) if r["hybrid"] else {
@@ -86,7 +86,7 @@ def build_prompt(question, chunks):
 def ask(question: str, tech: str | None = None, show_chunks: bool = False):
     cfg = load_config()
     tbl = chunks_table(cfg)
-    where = f"technology LIKE '%{tech}%'" if tech else None
+    where = tech_filter(tech)
     chunks = retrieve(cfg, tbl, question, where)
     if not chunks:
         console.print("No chunks retrieved."); return

@@ -15,7 +15,16 @@ from pathlib import Path
 from rich.console import Console
 from rich.progress import track
 
-from common import Manifest, chunks_table, embed_texts, load_catalog, load_config, sha256
+from common import (
+    Manifest,
+    chunks_table,
+    embed_texts,
+    load_catalog,
+    load_config,
+    make_chunk_id,
+    sha256,
+    sql_str,
+)
 
 console = Console()
 
@@ -64,7 +73,7 @@ def ingest_file(cfg, tbl, man, rel: str, meta: dict, src: Path):
     if prev and prev[0] == h and prev[1] == "done":
         return "skipped"
     if prev:  # changed file: drop old chunks first
-        tbl.delete(f"file_path = '{rel}'")
+        tbl.delete(f"file_path = {sql_str(rel)}")
     try:
         chunks = parse_and_chunk(cfg, src)
     except Exception as e:  # noqa: BLE001
@@ -77,7 +86,7 @@ def ingest_file(cfg, tbl, man, rel: str, meta: dict, src: Path):
     vecs = embed_texts(cfg, [c["text"] for c in chunks])
     rows = [
         dict(
-            chunk_id=f"{h[:12]}:{i:04d}",
+            chunk_id=make_chunk_id(rel, h, i),
             vector=v.tolist(),
             file_hash=h,
             file_path=rel,
