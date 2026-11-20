@@ -15,17 +15,27 @@ class LLMClient:
 
         self.client = anthropic.Anthropic()
 
-    def complete(self, system: str, user: str, max_tokens: int | None = None) -> str:
+    def _request(self, system: str, user: str | list[dict], max_tokens: int | None) -> dict:
+        """Shared request kwargs. `user` is a single prompt or a full messages list (multi-turn)."""
+        messages = [{"role": "user", "content": user}] if isinstance(user, str) else list(user)
         kwargs = {}
         # Newer SDK/model versions reject sampling params, so only send temperature if the
         # user explicitly set llm.temperature in config.yaml.
         if self.cfg.get("temperature") is not None:
             kwargs["temperature"] = self.cfg["temperature"]
-        resp = self.client.messages.create(
+        return dict(
             model=self.cfg["model"],
             max_tokens=max_tokens or self.cfg["max_tokens"],
             system=system,
-            messages=[{"role": "user", "content": user}],
+            messages=messages,
             **kwargs,
         )
+
+    def complete(self, system: str, user: str | list[dict], max_tokens: int | None = None) -> str:
+        resp = self.client.messages.create(**self._request(system, user, max_tokens))
         return "".join(getattr(b, "text", "") for b in resp.content)
+
+    def stream(self, system: str, user: str | list[dict], max_tokens: int | None = None):
+        """Yield the reply text incrementally as the model produces it."""
+        with self.client.messages.stream(**self._request(system, user, max_tokens)) as s:
+            yield from s.text_stream

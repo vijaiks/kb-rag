@@ -81,15 +81,21 @@ uv run python -m query.ask --tech LTE "Explain the MAC scheduler"
 uv run python -m query.ask --show-chunks "..."   # inspect what retrieval returned
 ```
 
-**Interactive chat** (models load once, then ~seconds per question):
+**Interactive chat** (models load once; answers stream; follow-up questions remember the conversation):
 
 ```bash
-uv run python -m query.chat
+uv run kb chat            # terminal  (same as: uv run python -m query.chat)
+uv run kb chat-web        # browser at http://localhost:8765 (localhost only, no extra deps)
 kb> what does CSI-RS measure?
+kb> and how is it configured in LTE?   # follow-ups are rewritten into standalone searches
+kb> :mode assistant   # kb = answer only from the KB (default); assistant = KB first, general knowledge allowed, labelled
 kb> :tech NR          # filter to a technology; :tech off to clear
+kb> :new              # start a fresh conversation
 kb> :chunks           # toggle showing retrieved chunks
 kb> :fast             # skip reranker + shorter answers for quick lookups
 ```
+
+The web page has the same controls (mode, tech filter, fast, New chat) and an expandable source list per answer.
 
 **Agent mode** (research → verify → act, human approves every action):
 
@@ -177,7 +183,9 @@ common.py            config, catalog, SHA-256 manifest, embedder, LanceDB schema
 ingest/pipeline.py   scan -> dedupe -> parse -> chunk -> embed -> store (+ FTS index)
 ingest/prune.py      remove chunks for deleted/excluded files
 query/ask.py         hybrid retrieve -> RRF -> rerank -> cited answer (CLI)
-query/chat.py        interactive REPL, models loaded once
+query/engine.py      conversational RAG engine (history, follow-up rewrite, streaming)
+query/chat.py        terminal chat client over the engine
+app/web.py           local web chat (stdlib server, SSE) + app/static/chat.html
 agents/loop.py       orchestrator + critic + human-approved actions
 llm/client.py        vendor-neutral LLM interface (Anthropic implementation)
 mcp_server/server.py MCP server exposing search_kb / kb_stats to the Claude app
@@ -189,7 +197,6 @@ config.yaml          paths, models, chunk sizes, retrieval settings
 - Vision captions for image-only pages (slides, screenshots) at ingestion time
 - Golden question set + Ragas evaluation harness
 - 3GPP / O-RAN specification collection with clause-based chunking
-- Streamlit chat UI
 
 ## License
 

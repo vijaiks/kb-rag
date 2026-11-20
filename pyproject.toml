@@ -40,6 +40,9 @@ kb = "app.cli:main"
 packages = ["ingest", "query", "llm", "app", "agents", "mcp_server"]
 py-modules = ["common"]
 
+[tool.setuptools.package-data]
+app = ["static/*.html"]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
