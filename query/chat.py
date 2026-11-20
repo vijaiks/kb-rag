@@ -1,8 +1,10 @@
-"""Interactive chat: models load ONCE, then every question costs only search + rerank + LLM.
+"""Interactive terminal chat: models load ONCE, answers stream, follow-up questions work.
 
-Run:  uv run python -m query.chat
+Run:  uv run python -m query.chat      (or: uv run kb chat)
 Commands inside the chat:
   :tech NR      filter next questions to a technology tag (:tech off to clear)
+  :mode kb|assistant   kb = answer only from the KB; assistant = KB first, general knowledge allowed
+  :new          start a new conversation (clears memory)
   :chunks       toggle printing the retrieved chunks
   :fast         toggle fast mode (skip the reranker, shorter answers)
   :quit         exit
@@ -11,27 +13,53 @@ from __future__ import annotations
 
 import time
 
+try:
+    import readline  # noqa: F401 - importing it gives input() line editing and arrow-key history
+except ImportError:  # pragma: no cover - not available on Windows
+    pass
+
 from rich.console import Console
+from rich.live import Live
 from rich.markdown import Markdown
 
-from common import chunks_table, embed_texts, load_config, tech_filter
-from llm.client import LLMClient
-from query.ask import SYSTEM, build_prompt, retrieve
+from query.engine import MODES, ChatEngine
 
 console = Console()
 
 
+def handle_command(q: str, eng: ChatEngine, state: dict) -> bool:
+    """Run a ':command'. Returns True if the line was a command."""
+    cmd, _, arg = q.partition(" ")
+    arg = arg.strip()
+    if cmd == ":tech":
+        state["tech"] = None if arg in ("", "off") else arg
+        console.print(f"[dim]technology filter: {state['tech'] or 'off'}[/dim]")
+    elif cmd == ":mode":
+        if arg in MODES:
+            eng.set_mode(arg)
+        console.print(f"[dim]mode: {eng.mode} (options: {', '.join(MODES)})[/dim]")
+    elif cmd == ":new":
+        eng.reset()
+        console.print("[dim]new conversation[/dim]")
+    elif cmd == ":chunks":
+        state["chunks"] = not state["chunks"]
+        console.print(f"[dim]show chunks: {state['chunks']}[/dim]")
+    elif cmd == ":fast":
+        eng.set_fast(not eng.fast)
+        console.print(f"[dim]fast mode: {eng.fast}[/dim]")
+    else:
+        return False
+    return True
+
+
 def main():
-    cfg = load_config()
     t0 = time.time()
     console.print("[dim]loading models (once per session)...[/dim]")
-    tbl = chunks_table(cfg)
-    embed_texts(cfg, ["warm up"])          # loads BGE-M3 onto the GPU
-    llm = LLMClient(cfg)
+    eng = ChatEngine()
+    eng.warm_up()
     console.print(f"[dim]ready in {time.time() - t0:.1f} s - ask away (:quit to exit)[/dim]")
 
-    tech, show_chunks, fast = None, False, False
-    configured_reranker = cfg["retrieval"].get("reranker")  # restored when :fast is turned off
+    state = {"tech": None, "chunks": False}
     while True:
         try:
             q = input("\nkb> ").strip()
@@ -41,37 +69,34 @@ def main():
             continue
         if q in (":quit", ":q", "exit"):
             break
-        if q.startswith(":tech"):
-            arg = q.split(maxsplit=1)[1] if " " in q else "off"
-            tech = None if arg == "off" else arg
-            console.print(f"[dim]technology filter: {tech or 'off'}[/dim]")
-            continue
-        if q == ":chunks":
-            show_chunks = not show_chunks
-            console.print(f"[dim]show chunks: {show_chunks}[/dim]")
-            continue
-        if q == ":fast":
-            fast = not fast
-            cfg["retrieval"]["reranker"] = None if fast else configured_reranker
-            console.print(f"[dim]fast mode: {fast}[/dim]")
+        if q.startswith(":"):
+            if not handle_command(q, eng, state):
+                console.print("[dim]unknown command[/dim]")
             continue
 
-        t1 = time.time()
-        where = tech_filter(tech)
-        chunks = retrieve(cfg, tbl, q, where)
-        t_ret = time.time() - t1
-        if not chunks:
-            console.print("no chunks retrieved")
+        text, sources, t1 = "", [], time.time()
+        try:
+            with Live(console=console, refresh_per_second=8, vertical_overflow="visible") as live:
+                for ev in eng.reply(q, state["tech"]):
+                    if ev["type"] == "sources":
+                        sources = ev["sources"]
+                        if state["chunks"]:
+                            for s in sources:
+                                live.console.print(
+                                    f"[dim][{s['tag']}] {s['file']} p.{s['page_start']} "
+                                    f"{s['section'][:60]}[/dim]")
+                    elif ev["type"] == "token":
+                        text += ev["text"]
+                        live.update(Markdown(text))
+        except KeyboardInterrupt:
+            console.print("[dim]interrupted (this turn is not kept in memory)[/dim]")
             continue
-        if show_chunks:
-            for i, c in enumerate(chunks, 1):
-                console.print(f"[dim][S{i}] {c['file_path']} p.{c['page_start']} {c['section_path'][:60]}[/dim]")
-        t2 = time.time()
-        answer = llm.complete(SYSTEM, build_prompt(q, chunks), max_tokens=700 if fast else None)
-        console.print(Markdown(answer))
-        console.print(f"[dim]retrieval {t_ret:.1f} s - llm {time.time() - t2:.1f} s[/dim]")
-        for i, c in enumerate(chunks, 1):
-            console.print(f"[dim][S{i}] {c['file_path']} p.{c['page_start']}-{c['page_end']}[/dim]")
+        except Exception as e:  # noqa: BLE001 - keep the session alive on API/network errors
+            console.print(f"[red]error: {e}[/red]")
+            continue
+        console.print(f"[dim]{time.time() - t1:.1f} s[/dim]")
+        for s in sources:
+            console.print(f"[dim][{s['tag']}] {s['file']} p.{s['page_start']}-{s['page_end']}[/dim]")
     return 0
 
 
