@@ -6,9 +6,12 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from unittest.mock import MagicMock
 
+import pytest
+
 from app.web import make_handler
 from llm.client import LLMClient
-from query.engine import ASSISTANT_SYSTEM, NOT_FOUND, ChatEngine
+from query.ask import SYSTEM as KB_SYSTEM
+from query.engine import ASSISTANT_SYSTEM, HISTORY_NOTE, NOT_FOUND, ChatEngine
 
 CHUNK = {"file_path": "a.pdf", "page_start": 1, "page_end": 2, "section_path": "S", "text": "txt"}
 
@@ -139,3 +142,59 @@ def test_web_chat_stream_and_guards():
         assert b"<textarea" in urllib.request.urlopen(f"http://127.0.0.1:{port}/").read()
     finally:
         srv.shutdown()
+
+
+# ---- additional engine coverage ----------------------------------------------
+def test_invalid_mode_rejected():
+    eng, _ = make_engine()
+    with pytest.raises(ValueError):
+        eng.set_mode("nope")
+    assert eng.mode == "kb"
+
+
+def test_condense_falls_back_on_llm_error_and_empty_output():
+    eng, _ = make_engine()
+    run(eng, "first")
+    eng.llm.complete = MagicMock(side_effect=RuntimeError("boom"))
+    assert eng.condense("and LTE?") == "and LTE?"
+    eng.llm.complete = MagicMock(return_value="   ")
+    assert eng.condense("and LTE?") == "and LTE?"
+
+
+def test_condense_prompt_includes_recent_history():
+    eng, _ = make_engine()
+    run(eng, "what is RACH?")
+    eng.condense("and LTE?")
+    prompt = eng.llm.completes[-1]
+    assert "user: what is RACH?" in prompt and "assistant: Hello [S1]" in prompt
+    assert "Latest message: and LTE?" in prompt
+
+
+def test_system_prompt_per_mode_and_history_note():
+    eng, _ = make_engine()
+    run(eng, "q1")
+    run(eng, "q2")
+    first, second = eng.llm.streams[0][0], eng.llm.streams[1][0]
+    assert first == KB_SYSTEM and second == KB_SYSTEM + HISTORY_NOTE
+
+
+def test_tech_filter_passed_to_retriever():
+    eng, retr = make_engine()
+    run(eng, "q", tech="NR")
+    assert retr.call_args.args[3] == "technology LIKE '%NR%'"
+    run(eng, "q")
+    assert retr.call_args.args[3] is None
+
+
+def test_source_events_carry_citation_fields():
+    eng, _ = make_engine(chunks=(CHUNK, {**CHUNK, "file_path": "b.pdf"}))
+    src = next(e for e in run(eng, "q") if e["type"] == "sources")["sources"]
+    assert [s["tag"] for s in src] == ["S1", "S2"]
+    assert src[1] == {"tag": "S2", "file": "b.pdf", "page_start": 1, "page_end": 2,
+                      "section": "S", "text": "txt"}
+
+
+def test_no_chunks_turn_is_remembered_in_kb_mode():
+    eng, _ = make_engine(chunks=())
+    run(eng, "x")
+    assert eng.history[-1] == {"role": "assistant", "content": NOT_FOUND}
